@@ -74,6 +74,48 @@
                 android:layout_marginStart="4dp"/>
         </LinearLayout>
 
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="16dp"
+            android:weightSum="3">
+
+            <Button
+                android:id="@+id/backupExportBtn"
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:layout_height="wrap_content"
+                android:text="⬆️ نسخ احتياطي"
+                android:textSize="11sp"
+                android:backgroundTint="@color/card"
+                android:textColor="@color/muted"
+                android:layout_marginEnd="4dp"/>
+
+            <Button
+                android:id="@+id/backupImportBtn"
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:layout_height="wrap_content"
+                android:text="⬇️ استيراد"
+                android:textSize="11sp"
+                android:backgroundTint="@color/card"
+                android:textColor="@color/muted"
+                android:layout_marginStart="4dp"
+                android:layout_marginEnd="4dp"/>
+
+            <Button
+                android:id="@+id/historyBtn"
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:layout_height="wrap_content"
+                android:text="📜 السجل"
+                android:textSize="11sp"
+                android:backgroundTint="@color/card"
+                android:textColor="@color/muted"
+                android:layout_marginStart="4dp"/>
+        </LinearLayout>
+
         <!-- ===== شاشة الإعداد ===== -->
         <LinearLayout
             android:id="@+id/setupLayout"
@@ -249,10 +291,19 @@
             android:padding="18dp"
             android:visibility="gone">
 
+            <ImageView
+                android:id="@+id/staticMapView"
+                android:layout_width="match_parent"
+                android:layout_height="150dp"
+                android:scaleType="centerCrop"
+                android:background="@color/bg"
+                android:visibility="gone"/>
+
             <HorizontalScrollView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:scrollbars="none">
+                android:scrollbars="none"
+                android:layout_marginTop="10dp">
 
                 <LinearLayout
                     android:id="@+id/savedPhotoThumbsRow"
@@ -260,6 +311,27 @@
                     android:layout_height="wrap_content"
                     android:orientation="horizontal"/>
             </HorizontalScrollView>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginTop="10dp">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_weight="1"
+                    android:layout_height="wrap_content"
+                    android:text="إرسال كـ بطاقة مدمجة (صورة واحدة)"
+                    android:textColor="@color/muted"
+                    android:textSize="12.5sp"/>
+
+                <Switch
+                    android:id="@+id/cardModeSwitch"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"/>
+            </LinearLayout>
 
             <TextView
                 android:id="@+id/savedDetailsView"

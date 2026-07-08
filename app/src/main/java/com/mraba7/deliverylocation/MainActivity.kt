@@ -2,35 +2,66 @@ package com.mraba7.deliverylocation
 
 import android.app.AlertDialog
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Rect
+import android.media.AudioManager
+import android.media.ToneGenerator
 import android.net.Uri
 import android.os.Bundle
-import android.view.Gravity
+import android.text.Layout
+import android.text.StaticLayout
+import android.text.TextPaint
+import android.util.Base64
 import android.widget.AdapterView
-import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.Spinner
+import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.FileProvider
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
+import java.net.HttpURLConnection
+import java.net.URL
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.concurrent.Executors
+import kotlin.math.cos
+import kotlin.math.floor
+import kotlin.math.ln
+import kotlin.math.tan
 
 class MainActivity : AppCompatActivity() {
 
     private val PREFS_NAME = "delivery_location_prefs"
     private val KEY_PROFILES = "profiles_list"
     private val KEY_CURRENT_PROFILE = "current_profile"
+    private val KEY_SEND_LOG = "send_log"
     private val MAX_PHOTOS = 6
+    private val MAX_LOG_ENTRIES = 5
     private val DEFAULT_PROFILE = "المنزل"
+    private val MAP_ZOOM = 17
+
+    private val executor = Executors.newSingleThreadExecutor()
 
     private lateinit var profileSpinner: Spinner
     private lateinit var addProfileBtn: Button
     private lateinit var deleteProfileBtn: Button
+    private lateinit var backupExportBtn: Button
+    private lateinit var backupImportBtn: Button
+    private lateinit var historyBtn: Button
 
     private lateinit var setupLayout: LinearLayout
     private lateinit var sendLayout: LinearLayout
@@ -45,7 +76,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var saveBtn: Button
     private lateinit var setupStatus: TextView
 
+    private lateinit var staticMapView: ImageView
     private lateinit var savedPhotoThumbsRow: LinearLayout
+    private lateinit var cardModeSwitch: Switch
     private lateinit var savedDetailsView: TextView
     private lateinit var sendBtn: Button
     private lateinit var waTextBtn: Button
@@ -54,8 +87,9 @@ class MainActivity : AppCompatActivity() {
 
     private var currentProfile: String = DEFAULT_PROFILE
     private var suppressSpinnerCallback = false
+    private var currentMapBitmap: Bitmap? = null
 
-    // ---------- إدارة البروفايلات ----------
+    // ---------- تخزين عام ----------
 
     private fun prefs() = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
 
@@ -80,6 +114,14 @@ class MainActivity : AppCompatActivity() {
     private fun profilePhotoFiles(profile: String): List<File> {
         return profilePhotosDir(profile).listFiles()?.sortedBy { it.name } ?: emptyList()
     }
+
+    private fun mapCacheFile(profile: String): File {
+        val dir = File(filesDir, "maps")
+        if (!dir.exists()) dir.mkdirs()
+        return File(dir, "${profile}_map.png")
+    }
+
+    // ---------- اختيار الصور ----------
 
     private val pickImagesLauncher = registerForActivityResult(
         ActivityResultContracts.GetMultipleContents()
@@ -106,6 +148,389 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // ---------- نسخ احتياطي JSON ----------
+
+    private val backupExportLauncher = registerForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri: Uri? ->
+        if (uri != null) {
+            try {
+                val json = buildBackupJson()
+                contentResolver.openOutputStream(uri)?.use { out ->
+                    out.write(json.toString().toByteArray())
+                }
+                Toast.makeText(this, "تم حفظ النسخة الاحتياطية", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                Toast.makeText(this, "تعذر حفظ النسخة الاحتياطية", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    private val backupImportLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            try {
+                val text = contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    ?.toString(Charsets.UTF_8) ?: ""
+                confirmRestoreBackup(text)
+            } catch (e: Exception) {
+                Toast.makeText(this, "تعذر قراءة الملف", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    private fun buildBackupJson(): JSONObject {
+        val root = JSONObject()
+        val profilesArray = JSONArray()
+        for (name in getProfiles()) {
+            val obj = JSONObject()
+            obj.put("name", name)
+            obj.put("maps_link", prefs().getString(keyFor("maps_link", name), "") ?: "")
+            obj.put("national_address", prefs().getString(keyFor("national_address", name), "") ?: "")
+            obj.put("building_number", prefs().getString(keyFor("building_number", name), "") ?: "")
+            obj.put("drop_off", prefs().getString(keyFor("drop_off", name), "") ?: "")
+
+            val photosArray = JSONArray()
+            for (file in profilePhotoFiles(name)) {
+                try {
+                    val bytes = file.readBytes()
+                    photosArray.put(Base64.encodeToString(bytes, Base64.NO_WRAP))
+                } catch (e: Exception) {
+                    // تجاهل صورة تالفة
+                }
+            }
+            obj.put("photos", photosArray)
+            profilesArray.put(obj)
+        }
+        root.put("profiles", profilesArray)
+        root.put("current_profile", currentProfile)
+        return root
+    }
+
+    private fun confirmRestoreBackup(jsonText: String) {
+        AlertDialog.Builder(this)
+            .setTitle("استيراد نسخة احتياطية")
+            .setMessage("هذا راح يستبدل كل العناوين والصور الحالية بالنسخة المستوردة. متأكد؟")
+            .setPositiveButton("استيراد") { _, _ -> restoreBackup(jsonText) }
+            .setNegativeButton("إلغاء", null)
+            .show()
+    }
+
+    private fun restoreBackup(jsonText: String) {
+        try {
+            val root = JSONObject(jsonText)
+            val profilesArray = root.getJSONArray("profiles")
+
+            // مسح البيانات الحالية بالكامل
+            for (name in getProfiles()) {
+                profilePhotoFiles(name).forEach { it.delete() }
+                profilePhotosDir(name).delete()
+                prefs().edit()
+                    .remove(keyFor("maps_link", name))
+                    .remove(keyFor("national_address", name))
+                    .remove(keyFor("building_number", name))
+                    .remove(keyFor("drop_off", name))
+                    .apply()
+            }
+
+            val newProfiles = mutableListOf<String>()
+            for (i in 0 until profilesArray.length()) {
+                val obj = profilesArray.getJSONObject(i)
+                val name = obj.getString("name")
+                newProfiles.add(name)
+
+                prefs().edit()
+                    .putString(keyFor("maps_link", name), obj.optString("maps_link", ""))
+                    .putString(keyFor("national_address", name), obj.optString("national_address", ""))
+                    .putString(keyFor("building_number", name), obj.optString("building_number", ""))
+                    .putString(keyFor("drop_off", name), obj.optString("drop_off", ""))
+                    .apply()
+
+                val photosArray = obj.optJSONArray("photos")
+                if (photosArray != null) {
+                    for (p in 0 until photosArray.length()) {
+                        try {
+                            val bytes = Base64.decode(photosArray.getString(p), Base64.NO_WRAP)
+                            val target = File(profilePhotosDir(name), "photo_$p.jpg")
+                            FileOutputStream(target).use { it.write(bytes) }
+                        } catch (e: Exception) {
+                            // تجاهل
+                        }
+                    }
+                }
+            }
+
+            saveProfiles(newProfiles)
+            currentProfile = root.optString("current_profile", newProfiles.firstOrNull() ?: DEFAULT_PROFILE)
+            if (!newProfiles.contains(currentProfile)) currentProfile = newProfiles.firstOrNull() ?: DEFAULT_PROFILE
+            prefs().edit().putString(KEY_CURRENT_PROFILE, currentProfile).apply()
+
+            setupProfileSpinner(newProfiles)
+            refreshScreenForCurrentProfile()
+            Toast.makeText(this, "تم الاستيراد بنجاح", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "ملف النسخة الاحتياطية غير صالح", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // ---------- سجل الإرسال ----------
+
+    private fun getSendLog(): List<String> {
+        val raw = prefs().getString(KEY_SEND_LOG, "") ?: ""
+        return if (raw.isEmpty()) emptyList() else raw.split("###").filter { it.isNotEmpty() }
+    }
+
+    private fun logSend(profile: String) {
+        val entries = getSendLog().toMutableList()
+        val now = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale("ar")).format(Date())
+        entries.add(0, "$now|||$profile")
+        while (entries.size > MAX_LOG_ENTRIES) entries.removeAt(entries.size - 1)
+        prefs().edit().putString(KEY_SEND_LOG, entries.joinToString("###")).apply()
+    }
+
+    private fun showHistoryDialog() {
+        val entries = getSendLog()
+        val message = if (entries.isEmpty()) {
+            "لا يوجد سجل إرسال بعد"
+        } else {
+            entries.joinToString("\n") { entry ->
+                val parts = entry.split("|||")
+                if (parts.size == 2) "🕓 ${parts[0]} — ${parts[1]}" else entry
+            }
+        }
+        AlertDialog.Builder(this)
+            .setTitle("آخر عمليات الإرسال")
+            .setMessage(message)
+            .setPositiveButton("إغلاق", null)
+            .show()
+    }
+
+    // ---------- الخريطة المصغّرة (OpenStreetMap) ----------
+
+    private fun parseCoordsFromUrl(url: String): Pair<Double, Double>? {
+        val patterns = listOf(
+            Regex("!3d(-?\\d+\\.\\d+)!4d(-?\\d+\\.\\d+)"),
+            Regex("@(-?\\d+\\.\\d+),(-?\\d+\\.\\d+)"),
+            Regex("place/(-?\\d+\\.\\d+),(-?\\d+\\.\\d+)"),
+            Regex("q=(-?\\d+\\.\\d+),(-?\\d+\\.\\d+)")
+        )
+        for (p in patterns) {
+            val m = p.find(url)
+            if (m != null) {
+                val lat = m.groupValues[1].toDoubleOrNull()
+                val lon = m.groupValues[2].toDoubleOrNull()
+                if (lat != null && lon != null) return Pair(lat, lon)
+            }
+        }
+        return null
+    }
+
+    private fun resolveCoordinates(originalLink: String): Pair<Double, Double>? {
+        parseCoordsFromUrl(originalLink)?.let { return it }
+
+        var url = originalLink
+        repeat(5) {
+            try {
+                val conn = URL(url).openConnection() as HttpURLConnection
+                conn.instanceFollowRedirects = false
+                conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Android) DeliveryLocationApp/1.0")
+                conn.connectTimeout = 8000
+                conn.readTimeout = 8000
+                val code = conn.responseCode
+                if (code in 300..399) {
+                    val loc = conn.getHeaderField("Location") ?: return null
+                    parseCoordsFromUrl(loc)?.let { return it }
+                    url = loc
+                } else {
+                    return parseCoordsFromUrl(url)
+                }
+            } catch (e: Exception) {
+                return null
+            }
+        }
+        return null
+    }
+
+    private fun fetchMapBitmap(lat: Double, lon: Double): Bitmap {
+        val n = 1 shl MAP_ZOOM
+        val xTile = (lon + 180.0) / 360.0 * n
+        val latRad = Math.toRadians(lat)
+        val yTile = (1.0 - ln(tan(latRad) + 1.0 / cos(latRad)) / Math.PI) / 2.0 * n
+
+        val tileX = floor(xTile).toInt()
+        val tileY = floor(yTile).toInt()
+        val px = ((xTile - tileX) * 256).toInt()
+        val py = ((yTile - tileY) * 256).toInt()
+
+        val tileUrl = "https://tile.openstreetmap.org/$MAP_ZOOM/$tileX/$tileY.png"
+        val conn = URL(tileUrl).openConnection() as HttpURLConnection
+        conn.setRequestProperty("User-Agent", "DeliveryLocationApp/1.0 (personal use)")
+        conn.connectTimeout = 8000
+        conn.readTimeout = 8000
+        val bytes = conn.inputStream.use { it.readBytes() }
+
+        val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+        val bmp = decoded.copy(Bitmap.Config.ARGB_8888, true)
+        val canvas = Canvas(bmp)
+
+        val fill = Paint(Paint.ANTI_ALIAS_FLAG)
+        fill.color = Color.RED
+        fill.style = Paint.Style.FILL
+        canvas.drawCircle(px.toFloat(), py.toFloat(), 9f, fill)
+
+        val outline = Paint(Paint.ANTI_ALIAS_FLAG)
+        outline.color = Color.WHITE
+        outline.style = Paint.Style.STROKE
+        outline.strokeWidth = 3f
+        canvas.drawCircle(px.toFloat(), py.toFloat(), 9f, outline)
+
+        return bmp
+    }
+
+    private fun loadStaticMap(profile: String) {
+        val link = prefs().getString(keyFor("maps_link", profile), "") ?: ""
+        if (link.isEmpty()) {
+            currentMapBitmap = null
+            staticMapView.visibility = ImageView.GONE
+            return
+        }
+
+        val cacheFile = mapCacheFile(profile)
+        val linkHashKey = keyFor("maps_link_hash", profile)
+        val savedHash = prefs().getString(linkHashKey, "")
+        val newHash = link.hashCode().toString()
+
+        if (cacheFile.exists() && savedHash == newHash) {
+            try {
+                val bmp = BitmapFactory.decodeFile(cacheFile.absolutePath)
+                if (bmp != null) {
+                    currentMapBitmap = bmp
+                    staticMapView.setImageBitmap(bmp)
+                    staticMapView.visibility = ImageView.VISIBLE
+                    return
+                }
+            } catch (e: Exception) {
+                // نكمل ونجيبها من الإنترنت
+            }
+        }
+
+        staticMapView.visibility = ImageView.GONE
+        executor.execute {
+            try {
+                val coords = resolveCoordinates(link)
+                if (coords != null) {
+                    val bmp = fetchMapBitmap(coords.first, coords.second)
+                    try {
+                        FileOutputStream(cacheFile).use { bmp.compress(Bitmap.CompressFormat.PNG, 90, it) }
+                        prefs().edit().putString(linkHashKey, newHash).apply()
+                    } catch (e: Exception) {
+                        // تجاهل فشل الكاش
+                    }
+                    runOnUiThread {
+                        if (currentProfile == profile) {
+                            currentMapBitmap = bmp
+                            staticMapView.setImageBitmap(bmp)
+                            staticMapView.visibility = ImageView.VISIBLE
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                // فشل تحميل الخريطة، نتجاهل بصمت
+            }
+        }
+    }
+
+    // ---------- بطاقة العنوان المدمجة ----------
+
+    private fun buildCardBitmap(profile: String): Bitmap {
+        val width = 900
+        val padding = 30
+        val text = buildMessageText()
+        val photos = profilePhotoFiles(profile)
+
+        val textPaint = TextPaint(Paint.ANTI_ALIAS_FLAG)
+        textPaint.color = Color.DKGRAY
+        textPaint.textSize = 30f
+
+        val layout = StaticLayout.Builder.obtain(text, 0, text.length, textPaint, width - padding * 2)
+            .setAlignment(Layout.Alignment.ALIGN_NORMAL)
+            .setLineSpacing(1.1f, 1.1f)
+            .build()
+
+        val mapHeight = if (currentMapBitmap != null) 260 else 0
+        val titleHeight = 70
+        val photosRows = if (photos.isEmpty()) 0 else ((photos.size + 1) / 2)
+        val photoCellHeight = 260
+        val photosHeight = if (photosRows > 0) photosRows * (photoCellHeight + 16) else 0
+
+        val totalHeight = padding + titleHeight + mapHeight +
+                (if (mapHeight > 0) 20 else 0) + layout.height + 20 + photosHeight + padding
+
+        val bmp = Bitmap.createBitmap(width, totalHeight, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bmp)
+        canvas.drawColor(Color.WHITE)
+
+        var cursorY = padding
+
+        val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        titlePaint.color = Color.parseColor("#128C4A")
+        titlePaint.textSize = 42f
+        titlePaint.isFakeBoldText = true
+        canvas.drawText("📍 $profile", padding.toFloat(), (cursorY + 48).toFloat(), titlePaint)
+        cursorY += titleHeight
+
+        if (currentMapBitmap != null) {
+            val dst = Rect(padding, cursorY, width - padding, cursorY + mapHeight)
+            canvas.drawBitmap(currentMapBitmap!!, null, dst, null)
+            cursorY += mapHeight + 20
+        }
+
+        canvas.save()
+        canvas.translate(padding.toFloat(), cursorY.toFloat())
+        layout.draw(canvas)
+        canvas.restore()
+        cursorY += layout.height + 20
+
+        if (photos.isNotEmpty()) {
+            var col = 0
+            var rowY = cursorY
+            val cellWidth = (width - padding * 2 - 16) / 2
+            for (file in photos) {
+                try {
+                    val photoBmp = BitmapFactory.decodeFile(file.absolutePath)
+                    if (photoBmp != null) {
+                        val x = padding + col * (cellWidth + 16)
+                        val dst = Rect(x, rowY, x + cellWidth, rowY + photoCellHeight)
+                        canvas.drawBitmap(photoBmp, null, dst, null)
+                    }
+                } catch (e: Exception) {
+                    // تجاهل صورة تالفة
+                }
+                col++
+                if (col == 2) {
+                    col = 0
+                    rowY += photoCellHeight + 16
+                }
+            }
+        }
+
+        return bmp
+    }
+
+    // ---------- صوت التأكيد ----------
+
+    private fun playConfirmSound() {
+        try {
+            val tg = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 80)
+            tg.startTone(ToneGenerator.TONE_PROP_BEEP2, 150)
+        } catch (e: Exception) {
+            // تجاهل لو الجهاز ما يدعمها
+        }
+    }
+
+    // ---------- دورة حياة الشاشة ----------
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -113,6 +538,9 @@ class MainActivity : AppCompatActivity() {
         profileSpinner = findViewById(R.id.profileSpinner)
         addProfileBtn = findViewById(R.id.addProfileBtn)
         deleteProfileBtn = findViewById(R.id.deleteProfileBtn)
+        backupExportBtn = findViewById(R.id.backupExportBtn)
+        backupImportBtn = findViewById(R.id.backupImportBtn)
+        historyBtn = findViewById(R.id.historyBtn)
 
         setupLayout = findViewById(R.id.setupLayout)
         sendLayout = findViewById(R.id.sendLayout)
@@ -127,14 +555,15 @@ class MainActivity : AppCompatActivity() {
         saveBtn = findViewById(R.id.saveBtn)
         setupStatus = findViewById(R.id.setupStatus)
 
+        staticMapView = findViewById(R.id.staticMapView)
         savedPhotoThumbsRow = findViewById(R.id.savedPhotoThumbsRow)
+        cardModeSwitch = findViewById(R.id.cardModeSwitch)
         savedDetailsView = findViewById(R.id.savedDetailsView)
         sendBtn = findViewById(R.id.sendBtn)
         waTextBtn = findViewById(R.id.waTextBtn)
         sendStatus = findViewById(R.id.sendStatus)
         editLink = findViewById(R.id.editLink)
 
-        // تجهيز البروفايلات لأول مرة
         var profiles = getProfiles()
         if (profiles.isEmpty()) {
             profiles = mutableListOf(DEFAULT_PROFILE)
@@ -146,9 +575,7 @@ class MainActivity : AppCompatActivity() {
 
         setupProfileSpinner(profiles)
 
-        choosePhotoBtn.setOnClickListener {
-            pickImagesLauncher.launch("image/*")
-        }
+        choosePhotoBtn.setOnClickListener { pickImagesLauncher.launch("image/*") }
 
         clearPhotosBtn.setOnClickListener {
             profilePhotoFiles(currentProfile).forEach { it.delete() }
@@ -177,9 +604,16 @@ class MainActivity : AppCompatActivity() {
         }
 
         editLink.setOnClickListener { showSetupScreen() }
-
         addProfileBtn.setOnClickListener { promptNewProfile() }
         deleteProfileBtn.setOnClickListener { confirmDeleteProfile() }
+
+        backupExportBtn.setOnClickListener {
+            backupExportLauncher.launch("delivery-locations-backup.json")
+        }
+        backupImportBtn.setOnClickListener {
+            backupImportLauncher.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))
+        }
+        historyBtn.setOnClickListener { showHistoryDialog() }
 
         sendBtn.setOnClickListener { sendLocation() }
         waTextBtn.setOnClickListener { sendTextOnly() }
@@ -188,8 +622,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupProfileSpinner(profiles: List<String>) {
-        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, profiles)
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        val adapter = ProfileAdapter(this, profiles)
         profileSpinner.adapter = adapter
         val idx = profiles.indexOf(currentProfile)
         if (idx >= 0) {
@@ -201,7 +634,8 @@ class MainActivity : AppCompatActivity() {
         profileSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: android.view.View?, position: Int, id: Long) {
                 if (suppressSpinnerCallback) return
-                val selected = adapter.getItem(position) ?: return
+                if (position < 0 || position >= profiles.size) return
+                val selected = profiles[position]
                 if (selected != currentProfile) {
                     currentProfile = selected
                     prefs().edit().putString(KEY_CURRENT_PROFILE, currentProfile).apply()
@@ -255,11 +689,13 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton("حذف") { _, _ ->
                 profilePhotoFiles(currentProfile).forEach { it.delete() }
                 profilePhotosDir(currentProfile).delete()
+                mapCacheFile(currentProfile).delete()
                 prefs().edit()
                     .remove(keyFor("maps_link", currentProfile))
                     .remove(keyFor("national_address", currentProfile))
                     .remove(keyFor("building_number", currentProfile))
                     .remove(keyFor("drop_off", currentProfile))
+                    .remove(keyFor("maps_link_hash", currentProfile))
                     .apply()
 
                 profiles.remove(currentProfile)
@@ -322,6 +758,7 @@ class MainActivity : AppCompatActivity() {
 
         savedDetailsView.text = buildMessageText()
         renderThumbs(savedPhotoThumbsRow, profilePhotoFiles(currentProfile))
+        loadStaticMap(currentProfile)
         sendStatus.text = ""
     }
 
@@ -344,9 +781,26 @@ class MainActivity : AppCompatActivity() {
     private fun sendLocation() {
         val text = buildMessageText()
         val files = profilePhotoFiles(currentProfile)
+        val useCard = cardModeSwitch.isChecked
 
         val intent: Intent
-        if (files.isEmpty()) {
+
+        if (useCard) {
+            try {
+                val cardBmp = buildCardBitmap(currentProfile)
+                val cardFile = File(cacheDir, "card_share.jpg")
+                FileOutputStream(cardFile).use { cardBmp.compress(Bitmap.CompressFormat.JPEG, 92, it) }
+                val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", cardFile)
+
+                intent = Intent(Intent.ACTION_SEND)
+                intent.type = "image/jpeg"
+                intent.putExtra(Intent.EXTRA_STREAM, uri)
+                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (e: Exception) {
+                sendStatus.text = "تعذر إنشاء البطاقة، جرب الوضع العادي"
+                return
+            }
+        } else if (files.isEmpty()) {
             intent = Intent(Intent.ACTION_SEND)
             intent.type = "text/plain"
             intent.putExtra(Intent.EXTRA_TEXT, text)
@@ -372,10 +826,14 @@ class MainActivity : AppCompatActivity() {
         try {
             startActivity(intent)
             sendStatus.text = "تم فتح واتساب، اختر محادثة المندوب"
+            logSend(currentProfile)
+            playConfirmSound()
         } catch (e: Exception) {
             try {
                 intent.setPackage(null)
                 startActivity(Intent.createChooser(intent, "إرسال عبر"))
+                logSend(currentProfile)
+                playConfirmSound()
             } catch (e2: Exception) {
                 sendStatus.text = "لم يتم العثور على واتساب على الجهاز"
             }
@@ -388,6 +846,8 @@ class MainActivity : AppCompatActivity() {
         val uri = Uri.parse("https://wa.me/?text=$encoded")
         val intent = Intent(Intent.ACTION_VIEW, uri)
         startActivity(intent)
+        logSend(currentProfile)
+        playConfirmSound()
         sendStatus.text = "تم فتح واتساب، أرفق الصور يدوياً إذا لزم"
     }
 }
