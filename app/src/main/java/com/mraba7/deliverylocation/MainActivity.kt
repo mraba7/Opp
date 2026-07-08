@@ -821,7 +821,7 @@ class MainActivity : AppCompatActivity() {
                 intent.putExtra(Intent.EXTRA_STREAM, uri)
                 intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             } catch (e: Exception) {
-                sendStatus.text = "تعذر إنشاء البطاقة، جرب الوضع العادي"
+                sendStatus.text = "تعذر إنشاء البطاقة: ${e.javaClass.simpleName} - ${e.message}"
                 return
             }
         } else if (files.isEmpty()) {
