@@ -441,6 +441,30 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun decodeSampledBitmap(file: File, reqWidth: Int, reqHeight: Int): Bitmap? {
+        return try {
+            val boundsOptions = BitmapFactory.Options()
+            boundsOptions.inJustDecodeBounds = true
+            BitmapFactory.decodeFile(file.absolutePath, boundsOptions)
+
+            var inSampleSize = 1
+            val (rawWidth, rawHeight) = boundsOptions.outWidth to boundsOptions.outHeight
+            if (rawHeight > reqHeight || rawWidth > reqWidth) {
+                val halfHeight = rawHeight / 2
+                val halfWidth = rawWidth / 2
+                while ((halfHeight / inSampleSize) >= reqHeight && (halfWidth / inSampleSize) >= reqWidth) {
+                    inSampleSize *= 2
+                }
+            }
+
+            val options = BitmapFactory.Options()
+            options.inSampleSize = inSampleSize
+            BitmapFactory.decodeFile(file.absolutePath, options)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     // ---------- بطاقة العنوان المدمجة ----------
 
     private fun buildCardBitmap(profile: String): Bitmap {
@@ -498,7 +522,7 @@ class MainActivity : AppCompatActivity() {
             val cellWidth = (width - padding * 2 - 16) / 2
             for (file in photos) {
                 try {
-                    val photoBmp = BitmapFactory.decodeFile(file.absolutePath)
+                    val photoBmp = decodeSampledBitmap(file, cellWidth, photoCellHeight)
                     if (photoBmp != null) {
                         val x = padding + col * (cellWidth + 16)
                         val dst = Rect(x, rowY, x + cellWidth, rowY + photoCellHeight)
@@ -788,7 +812,7 @@ class MainActivity : AppCompatActivity() {
         if (useCard) {
             try {
                 val cardBmp = buildCardBitmap(currentProfile)
-                val cardFile = File(cacheDir, "card_share.jpg")
+                val cardFile = File(filesDir, "card_share.jpg")
                 FileOutputStream(cardFile).use { cardBmp.compress(Bitmap.CompressFormat.JPEG, 92, it) }
                 val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", cardFile)
 
