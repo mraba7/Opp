@@ -3,6 +3,7 @@ package com.mraba7.deliverylocation
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageView
@@ -18,42 +19,62 @@ import java.io.FileOutputStream
 class MainActivity : AppCompatActivity() {
 
     private val PREFS_NAME = "delivery_location_prefs"
-    private val KEY_ADDRESS = "address"
+    private val KEY_MAPS_LINK = "maps_link"
+    private val KEY_NATIONAL_ADDRESS = "national_address"
+    private val KEY_DROP_OFF = "drop_off"
+    private val MAX_PHOTOS = 6
 
     private lateinit var setupLayout: LinearLayout
     private lateinit var sendLayout: LinearLayout
 
-    private lateinit var addressInput: EditText
-    private lateinit var photoPreview: ImageView
+    private lateinit var mapsLinkInput: EditText
+    private lateinit var nationalAddressInput: EditText
+    private lateinit var dropOffInput: EditText
+    private lateinit var photoThumbsRow: LinearLayout
     private lateinit var choosePhotoBtn: Button
+    private lateinit var clearPhotosBtn: Button
     private lateinit var saveBtn: Button
     private lateinit var setupStatus: TextView
 
-    private lateinit var savedPhotoView: ImageView
-    private lateinit var savedAddressView: TextView
+    private lateinit var savedPhotoThumbsRow: LinearLayout
+    private lateinit var savedDetailsView: TextView
     private lateinit var sendBtn: Button
     private lateinit var waTextBtn: Button
     private lateinit var sendStatus: TextView
     private lateinit var editLink: TextView
 
-    private val photoFile: File by lazy { File(filesDir, "home_photo.jpg") }
+    private fun photosDir(): File {
+        val dir = File(filesDir, "photos")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
 
-    private val pickImageLauncher = registerForActivityResult(
-        ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
-        if (uri != null) {
-            try {
-                contentResolver.openInputStream(uri)?.use { input ->
-                    FileOutputStream(photoFile).use { output ->
-                        input.copyTo(output)
-                    }
+    private fun photoFiles(): List<File> {
+        return photosDir().listFiles()?.sortedBy { it.name } ?: emptyList()
+    }
+
+    private val pickImagesLauncher = registerForActivityResult(
+        ActivityResultContracts.GetMultipleContents()
+    ) { uris: List<Uri> ->
+        if (uris.isNotEmpty()) {
+            val existingCount = photoFiles().size
+            var index = existingCount
+            for (uri in uris) {
+                if (index >= MAX_PHOTOS) {
+                    Toast.makeText(this, "الحد الأقصى $MAX_PHOTOS صور", Toast.LENGTH_SHORT).show()
+                    break
                 }
-                photoPreview.setImageURI(null)
-                photoPreview.setImageURI(Uri.fromFile(photoFile))
-                photoPreview.visibility = ImageView.VISIBLE
-            } catch (e: Exception) {
-                Toast.makeText(this, "تعذر تحميل الصورة", Toast.LENGTH_SHORT).show()
+                try {
+                    val target = File(photosDir(), "photo_$index.jpg")
+                    contentResolver.openInputStream(uri)?.use { input ->
+                        FileOutputStream(target).use { output -> input.copyTo(output) }
+                    }
+                    index++
+                } catch (e: Exception) {
+                    // تجاهل الصورة اللي فشلت ونكمل الباقي
+                }
             }
+            renderThumbs(photoThumbsRow, photoFiles())
         }
     }
 
@@ -64,83 +85,156 @@ class MainActivity : AppCompatActivity() {
         setupLayout = findViewById(R.id.setupLayout)
         sendLayout = findViewById(R.id.sendLayout)
 
-        addressInput = findViewById(R.id.addressInput)
-        photoPreview = findViewById(R.id.photoPreview)
+        mapsLinkInput = findViewById(R.id.mapsLinkInput)
+        nationalAddressInput = findViewById(R.id.nationalAddressInput)
+        dropOffInput = findViewById(R.id.dropOffInput)
+        photoThumbsRow = findViewById(R.id.photoThumbsRow)
         choosePhotoBtn = findViewById(R.id.choosePhotoBtn)
+        clearPhotosBtn = findViewById(R.id.clearPhotosBtn)
         saveBtn = findViewById(R.id.saveBtn)
         setupStatus = findViewById(R.id.setupStatus)
 
-        savedPhotoView = findViewById(R.id.savedPhotoView)
-        savedAddressView = findViewById(R.id.savedAddressView)
+        savedPhotoThumbsRow = findViewById(R.id.savedPhotoThumbsRow)
+        savedDetailsView = findViewById(R.id.savedDetailsView)
         sendBtn = findViewById(R.id.sendBtn)
         waTextBtn = findViewById(R.id.waTextBtn)
         sendStatus = findViewById(R.id.sendStatus)
         editLink = findViewById(R.id.editLink)
 
         choosePhotoBtn.setOnClickListener {
-            pickImageLauncher.launch("image/*")
+            pickImagesLauncher.launch("image/*")
+        }
+
+        clearPhotosBtn.setOnClickListener {
+            photoFiles().forEach { it.delete() }
+            renderThumbs(photoThumbsRow, emptyList())
         }
 
         saveBtn.setOnClickListener {
-            val address = addressInput.text.toString().trim()
-            if (address.isEmpty()) {
-                setupStatus.text = "الرجاء كتابة العنوان أولاً"
+            val mapsLink = mapsLinkInput.text.toString().trim()
+            val nationalAddress = nationalAddressInput.text.toString().trim()
+            val dropOff = dropOffInput.text.toString().trim()
+
+            if (mapsLink.isEmpty() && nationalAddress.isEmpty()) {
+                setupStatus.text = "الرجاء تعبئة رابط الموقع أو العنوان الوطني على الأقل"
                 return@setOnClickListener
             }
+
             getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
-                .putString(KEY_ADDRESS, address)
+                .putString(KEY_MAPS_LINK, mapsLink)
+                .putString(KEY_NATIONAL_ADDRESS, nationalAddress)
+                .putString(KEY_DROP_OFF, dropOff)
                 .apply()
-            showSendScreen(address)
+
+            showSendScreen()
         }
 
-        editLink.setOnClickListener {
-            val address = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(KEY_ADDRESS, "") ?: ""
-            showSetupScreen(address)
-        }
+        editLink.setOnClickListener { showSetupScreen() }
 
         sendBtn.setOnClickListener { sendLocation() }
         waTextBtn.setOnClickListener { sendTextOnly() }
 
-        val savedAddress = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(KEY_ADDRESS, "")
-        if (!savedAddress.isNullOrEmpty()) {
-            showSendScreen(savedAddress)
+        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        val hasSavedData = !prefs.getString(KEY_MAPS_LINK, "").isNullOrEmpty() ||
+                !prefs.getString(KEY_NATIONAL_ADDRESS, "").isNullOrEmpty()
+
+        if (hasSavedData) {
+            showSendScreen()
         } else {
-            showSetupScreen("")
+            showSetupScreen()
         }
     }
 
-    private fun showSetupScreen(prefillAddress: String) {
+    private fun renderThumbs(container: LinearLayout, files: List<File>) {
+        container.removeAllViews()
+        val sizePx = (72 * resources.displayMetrics.density).toInt()
+        val marginPx = (6 * resources.displayMetrics.density).toInt()
+        for (file in files) {
+            val img = ImageView(this)
+            val params = LinearLayout.LayoutParams(sizePx, sizePx)
+            params.marginEnd = marginPx
+            img.layoutParams = params
+            img.scaleType = ImageView.ScaleType.CENTER_CROP
+            img.setImageURI(Uri.fromFile(file))
+            container.addView(img)
+        }
+        if (files.isEmpty()) {
+            val empty = TextView(this)
+            empty.text = "لا توجد صور بعد"
+            empty.setTextColor(resources.getColor(R.color.muted, theme))
+            empty.textSize = 12.5f
+            container.addView(empty)
+        }
+    }
+
+    private fun showSetupScreen() {
         setupLayout.visibility = LinearLayout.VISIBLE
         sendLayout.visibility = LinearLayout.GONE
-        addressInput.setText(prefillAddress)
-        if (photoFile.exists()) {
-            photoPreview.setImageURI(Uri.fromFile(photoFile))
-            photoPreview.visibility = ImageView.VISIBLE
-        }
+
+        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        mapsLinkInput.setText(prefs.getString(KEY_MAPS_LINK, ""))
+        nationalAddressInput.setText(prefs.getString(KEY_NATIONAL_ADDRESS, ""))
+        dropOffInput.setText(prefs.getString(KEY_DROP_OFF, ""))
+        renderThumbs(photoThumbsRow, photoFiles())
     }
 
-    private fun showSendScreen(address: String) {
+    private fun showSendScreen() {
         setupLayout.visibility = LinearLayout.GONE
         sendLayout.visibility = LinearLayout.VISIBLE
-        savedAddressView.text = address
-        if (photoFile.exists()) {
-            savedPhotoView.setImageURI(Uri.fromFile(photoFile))
-        }
+
+        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        val mapsLink = prefs.getString(KEY_MAPS_LINK, "") ?: ""
+        val nationalAddress = prefs.getString(KEY_NATIONAL_ADDRESS, "") ?: ""
+        val dropOff = prefs.getString(KEY_DROP_OFF, "") ?: ""
+
+        val details = StringBuilder()
+        if (mapsLink.isNotEmpty()) details.append("📍 الموقع: $mapsLink\n")
+        if (nationalAddress.isNotEmpty()) details.append("🏷️ العنوان الوطني: $nationalAddress\n")
+        if (dropOff.isNotEmpty()) details.append("📦 مكان وضع الشحنة: $dropOff")
+
+        savedDetailsView.text = details.toString().trim()
+        renderThumbs(savedPhotoThumbsRow, photoFiles())
         sendStatus.text = ""
     }
 
-    private fun sendLocation() {
-        val address = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(KEY_ADDRESS, "") ?: ""
-        val intent = Intent(Intent.ACTION_SEND)
-        intent.putExtra(Intent.EXTRA_TEXT, "موقعي: $address")
+    private fun buildMessageText(): String {
+        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        val mapsLink = prefs.getString(KEY_MAPS_LINK, "") ?: ""
+        val nationalAddress = prefs.getString(KEY_NATIONAL_ADDRESS, "") ?: ""
+        val dropOff = prefs.getString(KEY_DROP_OFF, "") ?: ""
 
-        if (photoFile.exists()) {
-            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", photoFile)
-            intent.putExtra(Intent.EXTRA_STREAM, uri)
+        val sb = StringBuilder()
+        if (mapsLink.isNotEmpty()) sb.append("📍 الموقع: $mapsLink\n")
+        if (nationalAddress.isNotEmpty()) sb.append("🏷️ العنوان الوطني: $nationalAddress\n")
+        if (dropOff.isNotEmpty()) sb.append("📦 مكان وضع الشحنة: $dropOff")
+        return sb.toString().trim()
+    }
+
+    private fun sendLocation() {
+        val text = buildMessageText()
+        val files = photoFiles()
+
+        val intent: Intent
+        if (files.isEmpty()) {
+            intent = Intent(Intent.ACTION_SEND)
+            intent.type = "text/plain"
+            intent.putExtra(Intent.EXTRA_TEXT, text)
+        } else if (files.size == 1) {
+            intent = Intent(Intent.ACTION_SEND)
+            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", files[0])
             intent.type = "image/jpeg"
+            intent.putExtra(Intent.EXTRA_STREAM, uri)
+            intent.putExtra(Intent.EXTRA_TEXT, text)
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         } else {
-            intent.type = "text/plain"
+            intent = Intent(Intent.ACTION_SEND_MULTIPLE)
+            val uris = ArrayList(files.map {
+                FileProvider.getUriForFile(this, "$packageName.fileprovider", it)
+            })
+            intent.type = "image/jpeg"
+            intent.putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
+            intent.putExtra(Intent.EXTRA_TEXT, text)
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
 
         intent.setPackage("com.whatsapp")
@@ -158,11 +252,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun sendTextOnly() {
-        val address = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(KEY_ADDRESS, "") ?: ""
-        val encoded = Uri.encode("موقعي: $address")
+        val text = buildMessageText()
+        val encoded = Uri.encode(text)
         val uri = Uri.parse("https://wa.me/?text=$encoded")
         val intent = Intent(Intent.ACTION_VIEW, uri)
         startActivity(intent)
-        sendStatus.text = "تم فتح واتساب، أرفق الصورة يدوياً إذا لزم"
+        sendStatus.text = "تم فتح واتساب، أرفق الصور يدوياً إذا لزم"
     }
 }

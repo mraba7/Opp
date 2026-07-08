@@ -30,7 +30,7 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="اضغط زر واحد يوصل للمندوب العنوان وصورة المنزل مباشرة"
+            android:text="اضغط زر واحد يوصل للمندوب كل التفاصيل والصور مباشرة"
             android:textColor="@color/muted"
             android:textSize="13sp"
             android:gravity="center"
@@ -49,41 +49,116 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="العنوان"
+                android:text="رابط الموقع من قوقل مابس"
                 android:textColor="@color/muted"
                 android:textSize="13sp"/>
 
             <EditText
-                android:id="@+id/addressInput"
+                android:id="@+id/mapsLinkInput"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:minLines="3"
-                android:gravity="top|start"
-                android:textDirection="rtl"
-                android:hint="مثال: حي كذا، شارع كذا، بجانب كذا، رقم المبنى..."
+                android:inputType="textUri"
+                android:gravity="start"
+                android:textDirection="ltr"
+                android:hint="https://maps.app.goo.gl/xxxxx"
                 android:textColorHint="@color/muted"
                 android:textColor="@color/text_light"
                 android:backgroundTint="@color/muted"
                 android:padding="10dp"
                 android:layout_marginTop="6dp"/>
 
-            <ImageView
-                android:id="@+id/photoPreview"
-                android:layout_width="match_parent"
-                android:layout_height="160dp"
-                android:scaleType="centerCrop"
-                android:background="@color/bg"
-                android:layout_marginTop="16dp"
-                android:visibility="gone"/>
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="العنوان الوطني المختصر"
+                android:textColor="@color/muted"
+                android:textSize="13sp"
+                android:layout_marginTop="16dp"/>
 
-            <Button
-                android:id="@+id/choosePhotoBtn"
+            <EditText
+                android:id="@+id/nationalAddressInput"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="اختيار صورة المنزل / البوابة"
-                android:backgroundTint="@color/bg"
+                android:inputType="textCapCharacters"
+                android:textDirection="ltr"
+                android:gravity="start"
+                android:hint="مثال: RRRD1234"
+                android:textColorHint="@color/muted"
                 android:textColor="@color/text_light"
-                android:layout_marginTop="12dp"/>
+                android:backgroundTint="@color/muted"
+                android:padding="10dp"
+                android:layout_marginTop="6dp"/>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="مكان وضع الشحنة"
+                android:textColor="@color/muted"
+                android:textSize="13sp"
+                android:layout_marginTop="16dp"/>
+
+            <EditText
+                android:id="@+id/dropOffInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minLines="2"
+                android:gravity="top|start"
+                android:textDirection="rtl"
+                android:hint="مثال: عند البوابة الرئيسية، بجانب العداد الكهرباء..."
+                android:textColorHint="@color/muted"
+                android:textColor="@color/text_light"
+                android:backgroundTint="@color/muted"
+                android:padding="10dp"
+                android:layout_marginTop="6dp"/>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="صور المنزل / البوابة"
+                android:textColor="@color/muted"
+                android:textSize="13sp"
+                android:layout_marginTop="16dp"/>
+
+            <HorizontalScrollView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:scrollbars="none"
+                android:layout_marginTop="6dp">
+
+                <LinearLayout
+                    android:id="@+id/photoThumbsRow"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"/>
+            </HorizontalScrollView>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="10dp"
+                android:weightSum="2">
+
+                <Button
+                    android:id="@+id/choosePhotoBtn"
+                    android:layout_width="0dp"
+                    android:layout_weight="1"
+                    android:layout_height="wrap_content"
+                    android:text="إضافة صور"
+                    android:backgroundTint="@color/bg"
+                    android:textColor="@color/text_light"
+                    android:layout_marginEnd="6dp"/>
+
+                <Button
+                    android:id="@+id/clearPhotosBtn"
+                    android:layout_width="0dp"
+                    android:layout_weight="1"
+                    android:layout_height="wrap_content"
+                    android:text="مسح الصور"
+                    android:backgroundTint="@color/bg"
+                    android:textColor="@color/muted"
+                    android:layout_marginStart="6dp"/>
+            </LinearLayout>
 
             <Button
                 android:id="@+id/saveBtn"
@@ -93,7 +168,7 @@
                 android:backgroundTint="@color/accent"
                 android:textColor="@color/bg"
                 android:textStyle="bold"
-                android:layout_marginTop="14dp"/>
+                android:layout_marginTop="16dp"/>
 
             <TextView
                 android:id="@+id/setupStatus"
@@ -115,15 +190,20 @@
             android:padding="18dp"
             android:visibility="gone">
 
-            <ImageView
-                android:id="@+id/savedPhotoView"
+            <HorizontalScrollView
                 android:layout_width="match_parent"
-                android:layout_height="150dp"
-                android:scaleType="centerCrop"
-                android:background="@color/bg"/>
+                android:layout_height="wrap_content"
+                android:scrollbars="none">
+
+                <LinearLayout
+                    android:id="@+id/savedPhotoThumbsRow"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"/>
+            </HorizontalScrollView>
 
             <TextView
-                android:id="@+id/savedAddressView"
+                android:id="@+id/savedDetailsView"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:textColor="@color/text_light"
@@ -165,7 +245,7 @@
                 android:id="@+id/editLink"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="تعديل العنوان أو الصورة"
+                android:text="تعديل التفاصيل أو الصور"
                 android:textColor="@color/muted"
                 android:textSize="12.5sp"
                 android:gravity="center"
