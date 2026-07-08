@@ -8,6 +8,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Rect
+import android.graphics.RectF
 import android.media.AudioManager
 import android.media.ToneGenerator
 import android.net.Uri
@@ -363,7 +364,9 @@ class MainActivity : AppCompatActivity() {
         val px = ((xTile - tileX) * 256).toInt()
         val py = ((yTile - tileY) * 256).toInt()
 
-        val tileUrl = "https://tile.openstreetmap.org/$MAP_ZOOM/$tileX/$tileY.png"
+        // نمط خرائط أحدث وأوضح ألوان (CARTO Voyager) بدل الطراز الكلاسيكي القديم لـ OSM
+        val subdomain = listOf("a", "b", "c", "d").random()
+        val tileUrl = "https://$subdomain.basemaps.cartocdn.com/rastertiles/voyager/$MAP_ZOOM/$tileX/$tileY.png"
         val conn = URL(tileUrl).openConnection() as HttpURLConnection
         conn.setRequestProperty("User-Agent", "DeliveryLocationApp/1.0 (personal use)")
         conn.connectTimeout = 8000
@@ -374,18 +377,50 @@ class MainActivity : AppCompatActivity() {
         val bmp = decoded.copy(Bitmap.Config.ARGB_8888, true)
         val canvas = Canvas(bmp)
 
-        val fill = Paint(Paint.ANTI_ALIAS_FLAG)
-        fill.color = Color.RED
-        fill.style = Paint.Style.FILL
-        canvas.drawCircle(px.toFloat(), py.toFloat(), 9f, fill)
+        drawPinMarker(canvas, px.toFloat(), py.toFloat())
 
-        val outline = Paint(Paint.ANTI_ALIAS_FLAG)
-        outline.color = Color.WHITE
-        outline.style = Paint.Style.STROKE
-        outline.strokeWidth = 3f
-        canvas.drawCircle(px.toFloat(), py.toFloat(), 9f, outline)
+        // إسناد المصدر (مطلوب من سياسة الاستخدام)
+        val attrBg = Paint(Paint.ANTI_ALIAS_FLAG)
+        attrBg.color = Color.argb(140, 0, 0, 0)
+        canvas.drawRect(0f, bmp.height - 20f, 190f, bmp.height.toFloat(), attrBg)
+        val attrText = Paint(Paint.ANTI_ALIAS_FLAG)
+        attrText.color = Color.WHITE
+        attrText.textSize = 10f
+        canvas.drawText("© OpenStreetMap, © CARTO", 6f, bmp.height - 6f, attrText)
 
         return bmp
+    }
+
+    private fun drawPinMarker(canvas: Canvas, cx: Float, cy: Float) {
+        val r = 13f
+
+        // ظل خفيف تحت الدبوس
+        val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        shadowPaint.color = Color.argb(60, 0, 0, 0)
+        canvas.drawOval(cx - r * 0.7f, cy + r * 0.9f, cx + r * 0.7f, cy + r * 1.3f, shadowPaint)
+
+        // جسم الدبوس (شكل دمعة)
+        val pinPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        pinPaint.color = Color.parseColor("#128C4A")
+        val path = android.graphics.Path()
+        path.addCircle(cx, cy - r, r, android.graphics.Path.Direction.CW)
+        path.moveTo(cx - r * 0.65f, cy - r * 0.25f)
+        path.lineTo(cx, cy + r * 1.1f)
+        path.lineTo(cx + r * 0.65f, cy - r * 0.25f)
+        path.close()
+        canvas.drawPath(path, pinPaint)
+
+        // حدّ أبيض حول الدبوس
+        val outlinePaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        outlinePaint.color = Color.WHITE
+        outlinePaint.style = Paint.Style.STROKE
+        outlinePaint.strokeWidth = 2.5f
+        canvas.drawCircle(cx, cy - r, r, outlinePaint)
+
+        // نقطة بيضاء بالمنتصف
+        val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        dotPaint.color = Color.WHITE
+        canvas.drawCircle(cx, cy - r, r * 0.4f, dotPaint)
     }
 
     private fun loadStaticMap(profile: String) {
@@ -467,55 +502,99 @@ class MainActivity : AppCompatActivity() {
 
     // ---------- بطاقة العنوان المدمجة ----------
 
+    private fun drawRoundedBitmap(canvas: Canvas, bitmap: Bitmap, dst: RectF, radius: Float) {
+        val path = android.graphics.Path()
+        path.addRoundRect(dst, radius, radius, android.graphics.Path.Direction.CW)
+        canvas.save()
+        canvas.clipPath(path)
+        canvas.drawBitmap(bitmap, null, dst, null)
+        canvas.restore()
+
+        val border = Paint(Paint.ANTI_ALIAS_FLAG)
+        border.color = Color.parseColor("#E0E0E0")
+        border.style = Paint.Style.STROKE
+        border.strokeWidth = 2f
+        canvas.drawRoundRect(dst, radius, radius, border)
+    }
+
     private fun buildCardBitmap(profile: String): Bitmap {
         val width = 900
         val padding = 30
-        val text = buildMessageText()
+        val text = buildMessageText().ifEmpty { " " }
         val photos = profilePhotoFiles(profile)
 
         val textPaint = TextPaint(Paint.ANTI_ALIAS_FLAG)
-        textPaint.color = Color.DKGRAY
+        textPaint.color = Color.parseColor("#1F3B33")
         textPaint.textSize = 30f
 
         val layout = StaticLayout.Builder.obtain(text, 0, text.length, textPaint, width - padding * 2)
             .setAlignment(Layout.Alignment.ALIGN_NORMAL)
-            .setLineSpacing(1.1f, 1.1f)
+            .setLineSpacing(1.25f, 1.25f)
             .build()
 
+        val headerHeight = 120
         val mapHeight = if (currentMapBitmap != null) 260 else 0
-        val titleHeight = 70
+        val dividerGap = 22
         val photosRows = if (photos.isEmpty()) 0 else ((photos.size + 1) / 2)
         val photoCellHeight = 260
         val photosHeight = if (photosRows > 0) photosRows * (photoCellHeight + 16) else 0
+        val footerHeight = 50
 
-        val totalHeight = padding + titleHeight + mapHeight +
-                (if (mapHeight > 0) 20 else 0) + layout.height + 20 + photosHeight + padding
+        val totalHeight = (headerHeight + padding +
+                (if (mapHeight > 0) mapHeight + dividerGap else 0) +
+                layout.height + dividerGap +
+                photosHeight +
+                footerHeight + padding).coerceAtLeast(300)
 
         val bmp = Bitmap.createBitmap(width, totalHeight, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bmp)
         canvas.drawColor(Color.WHITE)
 
-        var cursorY = padding
+        // ===== شريط الهيدر الملون =====
+        val headerPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        headerPaint.shader = android.graphics.LinearGradient(
+            0f, 0f, width.toFloat(), 0f,
+            Color.parseColor("#25D366"), Color.parseColor("#128C4A"),
+            android.graphics.Shader.TileMode.CLAMP
+        )
+        canvas.drawRect(0f, 0f, width.toFloat(), headerHeight.toFloat(), headerPaint)
 
         val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG)
-        titlePaint.color = Color.parseColor("#128C4A")
-        titlePaint.textSize = 42f
+        titlePaint.color = Color.WHITE
+        titlePaint.textSize = 46f
         titlePaint.isFakeBoldText = true
-        canvas.drawText("📍 $profile", padding.toFloat(), (cursorY + 48).toFloat(), titlePaint)
-        cursorY += titleHeight
+        canvas.drawText("📍 $profile", padding.toFloat(), 68f, titlePaint)
 
+        val subtitlePaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        subtitlePaint.color = Color.argb(230, 255, 255, 255)
+        subtitlePaint.textSize = 24f
+        canvas.drawText("تفاصيل التوصيل", padding.toFloat(), 100f, subtitlePaint)
+
+        var cursorY = headerHeight + padding
+
+        // ===== الخريطة (بحواف دائرية) =====
         if (currentMapBitmap != null) {
-            val dst = Rect(padding, cursorY, width - padding, cursorY + mapHeight)
-            canvas.drawBitmap(currentMapBitmap!!, null, dst, null)
-            cursorY += mapHeight + 20
+            val dst = RectF(padding.toFloat(), cursorY.toFloat(), (width - padding).toFloat(), (cursorY + mapHeight).toFloat())
+            drawRoundedBitmap(canvas, currentMapBitmap!!, dst, 20f)
+            cursorY += mapHeight + dividerGap
         }
 
+        // ===== التفاصيل النصية =====
         canvas.save()
         canvas.translate(padding.toFloat(), cursorY.toFloat())
         layout.draw(canvas)
         canvas.restore()
-        cursorY += layout.height + 20
+        cursorY += layout.height + dividerGap
 
+        // خط فاصل خفيف
+        val dividerPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        dividerPaint.color = Color.parseColor("#E8E8E8")
+        dividerPaint.strokeWidth = 2f
+        if (photos.isNotEmpty()) {
+            canvas.drawLine(padding.toFloat(), (cursorY - dividerGap / 2).toFloat(), (width - padding).toFloat(), (cursorY - dividerGap / 2).toFloat(), dividerPaint)
+        }
+
+        // ===== شبكة الصور (بحواف دائرية) =====
         if (photos.isNotEmpty()) {
             var col = 0
             var rowY = cursorY
@@ -525,8 +604,8 @@ class MainActivity : AppCompatActivity() {
                     val photoBmp = decodeSampledBitmap(file, cellWidth, photoCellHeight)
                     if (photoBmp != null) {
                         val x = padding + col * (cellWidth + 16)
-                        val dst = Rect(x, rowY, x + cellWidth, rowY + photoCellHeight)
-                        canvas.drawBitmap(photoBmp, null, dst, null)
+                        val dst = RectF(x.toFloat(), rowY.toFloat(), (x + cellWidth).toFloat(), (rowY + photoCellHeight).toFloat())
+                        drawRoundedBitmap(canvas, photoBmp, dst, 16f)
                     }
                 } catch (e: Exception) {
                     // تجاهل صورة تالفة
@@ -537,7 +616,15 @@ class MainActivity : AppCompatActivity() {
                     rowY += photoCellHeight + 16
                 }
             }
+            cursorY = rowY + (if (col > 0) photoCellHeight + 16 else 0)
         }
+
+        // ===== تذييل بسيط =====
+        val footerPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        footerPaint.color = Color.parseColor("#9AA9A2")
+        footerPaint.textSize = 20f
+        footerPaint.textAlign = Paint.Align.CENTER
+        canvas.drawText("🚚 عبر تطبيق موقعي للمندوب", width / 2f, (totalHeight - padding / 2).toFloat(), footerPaint)
 
         return bmp
     }
@@ -819,6 +906,7 @@ class MainActivity : AppCompatActivity() {
                 intent = Intent(Intent.ACTION_SEND)
                 intent.type = "image/jpeg"
                 intent.putExtra(Intent.EXTRA_STREAM, uri)
+                intent.putExtra(Intent.EXTRA_TEXT, text)
                 intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             } catch (e: Exception) {
                 sendStatus.text = "تعذر إنشاء البطاقة: ${e.javaClass.simpleName} - ${e.message}"
